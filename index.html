@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TikTok OAuth Integration App</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .container {
+            margin: 20px;
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+
+        .button {
+            padding: 10px 20px;
+            margin-right: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .btn-primary {
+            background-color: #010101;
+            color: white;
+        }
+
+        .btn-secondary {
+            background-color: #2196F3;
+            color: white;
+        }
+
+        .btn-disabled {
+            background-color: #cccccc;
+            color: #666666;
+            cursor: not-allowed;
+        }
+
+        .status {
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-weight: bold;
+            margin-left: 10px;
+            display: none;
+        }
+
+        .token-display {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #f5f5f5;
+            border-radius: 4px;
+            word-break: break-all;
+        }
+
+        .validation-result {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Integrations Testing App</h1>
+
+    <section id="tiktok-app">
+        <div class="container">
+            <h2>TikTok OAuth Integration</h2>
+
+            <!-- Current Status -->
+            <div id="auth-status" style="margin-bottom: 15px;">
+                <strong>Status:</strong> <span id="current-status">Not authenticated</span>
+            </div>
+
+            <!-- Button Controls -->
+            <div style="margin-bottom: 15px;">
+                <button id="login-btn" onclick="oauthSignIn()" class="button btn-primary">
+                    Login with TikTok
+                </button>
+
+                <button id="validate-btn" onclick="validateTikTokAccess()" class="button btn-secondary" disabled>
+                    Validate TikTok API Access
+                </button>
+
+                <button id="logout-btn" onclick="logout()" class="button btn-disabled" disabled>
+                    Logout
+                </button>
+
+                <!-- Response Indicator -->
+                <span id="response-status" class="status"></span>
+            </div>
+
+            <!-- Token Display -->
+            <div id="token-display" class="token-display" style="display: none;">
+                <strong>Access Token:</strong>
+                <div id="token-text"></div>
+            </div>
+
+            <!-- Validation Result -->
+            <div id="validation-result" style="display: none;"></div>
+        </div>
+
+        <script>
+            let currentAuthorizationCode = null;
+            let currentAccessToken = null;
+
+            // Listen for OAuth callback message
+            window.addEventListener('message', function (event) {
+                // ✅ Only accept messages from our own origin (adjust if needed)
+                const allowedOrigin = window.location.origin;
+
+                // Ignore messages from other origins or devtools
+                if (event.origin !== allowedOrigin) return;
+                if (event.data?.source === 'react-devtools-content-script') return;
+
+                console.log('Received message from popup:', event.data);
+
+                if (event.data.type === 'OAUTH_CODE_RECEIVED') {
+                    currentAuthorizationCode = event.data.code;
+                    setAuthenticatedState(true);
+                    showResponseStatus('success', 'Authorization code received! Click Validate to get access token.');
+                } else if (event.data.type === 'OAUTH_ERROR') {
+                    showResponseStatus('error', 'OAuth error: ' + event.data.error);
+                }
+            });
+
+
+            // Generate PKCE challenge
+            async function generatePKCE() {
+                const array = new Uint8Array(32);
+                crypto.getRandomValues(array);
+                const codeVerifier = btoa(String.fromCharCode(...array))
+                    .replace(/\+/g, '-')
+                    .replace(/\//g, '_')
+                    .replace(/=+$/, '');
+
+                const encoder = new TextEncoder();
+                const data = encoder.encode(codeVerifier);
+                const digest = await crypto.subtle.digest('SHA-256', data);
+
+                const codeChallenge = btoa(String.fromCharCode(...new Uint8Array(digest)))
+                    .replace(/\+/g, '-')
+                    .replace(/\//g, '_')
+                    .replace(/=+$/, '');
+
+                return { codeVerifier, codeChallenge };
+            }
+
+            /*
+             * Step 1: Initiate OAuth login with TikTok
+             */
+            async function oauthSignIn() {
+                try {
+                    showResponseStatus('loading', 'Opening TikTok login...');
+
+                    const { codeVerifier, codeChallenge } = await generatePKCE();
+
+                    // Store code verifier for later token exchange
+                    localStorage.setItem('tiktok_code_verifier', codeVerifier);
+
+                    const oauth2Endpoint = 'https://www.tiktok.com/v2/auth/authorize/';
+
+                    const params = new URLSearchParams({
+                        client_key:"sbawncj5urc9813bxe",
+                        scope: "video.upload,user.info.basic",
+                        response_type: "code",
+                        redirect_uri: "http://localhost:8000/tiktok/callback",
+                        state: "tiktok_oauth_" + Date.now(),
+                        code_challenge: codeChallenge,
+                        code_challenge_method: "S256"
+                    });
+
+                    const authUrl = oauth2Endpoint + '?' + params.toString();
+                    const popup = window.open(authUrl, "tiktok_oauth_popup", "width=600,height=800");
+
+                    if (!popup) {
+                        showResponseStatus('error', 'Popup blocked! Please allow popups.');
+                        return;
+                    }
+                } catch (error) {
+                    showResponseStatus('error', 'Login error: ' + error.message);
+                    console.error(error);
+                }
+            }
+
+            /*
+             * Step 2: Exchange code with backend for access token
+             */
+            async function validateTikTokAccess() {
+                if (!currentAuthorizationCode) {
+                    showResponseStatus('error', 'No authorization code available.');
+                    return;
+                }
+
+                const codeVerifier = localStorage.getItem('tiktok_code_verifier');
+
+                const response = await fetch('http://localhost:8000/validate-tiktok-api', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        authorization_code: currentAuthorizationCode,
+                        code_verifier: codeVerifier
+                    })
+                });
+
+                const result = await response.json();
+                console.log(result);
+            }
+
+            /*
+             * Set authenticated state (after receiving code)
+             */
+            function setAuthenticatedState(hasAuth) {
+                if (hasAuth) {
+                    document.getElementById('current-status').textContent = 'Authorization code received ✓';
+                    document.getElementById('current-status').style.color = '#ff9800';
+
+                    document.getElementById('login-btn').disabled = true;
+                    document.getElementById('login-btn').className = 'button btn-disabled';
+
+                    document.getElementById('validate-btn').disabled = false;
+                    document.getElementById('validate-btn').className = 'button btn-secondary';
+
+                    document.getElementById('logout-btn').disabled = false;
+                    document.getElementById('logout-btn').className = 'button btn-primary';
+                }
+            }
+
+            /*
+             * Set the access token and update UI
+             */
+            function setAccessToken(token) {
+                document.getElementById('current-status').textContent = 'Authenticated ✓';
+                document.getElementById('current-status').style.color = '#4CAF50';
+
+                const tokenDisplay = document.getElementById('token-display');
+                const tokenText = document.getElementById('token-text');
+                tokenText.innerHTML = token.substring(0, 80) + '...';
+                tokenDisplay.style.display = 'block';
+            }
+
+            /*
+             * Logout and reset UI
+             */
+            function logout() {
+                currentAuthorizationCode = null;
+                currentAccessToken = null;
+
+                document.getElementById('current-status').textContent = 'Not authenticated';
+                document.getElementById('current-status').style.color = '#666';
+
+                document.getElementById('login-btn').disabled = false;
+                document.getElementById('login-btn').className = 'button btn-primary';
+
+                document.getElementById('validate-btn').disabled = true;
+                document.getElementById('validate-btn').className = 'button btn-disabled';
+
+                document.getElementById('logout-btn').disabled = true;
+                document.getElementById('logout-btn').className = 'button btn-disabled';
+
+                document.getElementById('token-display').style.display = 'none';
+                document.getElementById('validation-result').style.display = 'none';
+
+                showResponseStatus('success', 'Logged out successfully.');
+            }
+
+            /*
+             * Status message helper
+             */
+            function showResponseStatus(type, message) {
+                const statusEl = document.getElementById('response-status');
+                statusEl.style.display = 'inline';
+                statusEl.textContent = message;
+
+                switch (type) {
+                    case 'success':
+                        statusEl.style.backgroundColor = '#4CAF50';
+                        statusEl.style.color = 'white';
+                        break;
+                    case 'error':
+                        statusEl.style.backgroundColor = '#f44336';
+                        statusEl.style.color = 'white';
+                        break;
+                    case 'loading':
+                        statusEl.style.backgroundColor = '#ff9800';
+                        statusEl.style.color = 'white';
+                        break;
+                    default:
+                        statusEl.style.backgroundColor = '#ddd';
+                        statusEl.style.color = 'black';
+                }
+
+                if (type !== 'loading') {
+                    setTimeout(() => statusEl.style.display = 'none', 5000);
+                }
+            }
+        </script>
+    </section>
+
+</body>
+
+</html>

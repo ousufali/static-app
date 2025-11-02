@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>TikTok OAuth Callback</title>
+</head>
+
+<body>
+    <h2>Processing TikTok OAuth Response...</h2>
+    <p id="status">Please wait...</p>
+
+    <script>
+        function processOAuthCallback() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const code = urlParams.get('code');
+            const error = urlParams.get('error');
+            const state = urlParams.get('state');
+
+            console.log('Callback received:', { code, error, state });
+
+            if (error) {
+                document.getElementById('status').textContent = 'OAuth Error: ' + error;
+                if (window.opener) {
+                    window.opener.postMessage({ type: 'OAUTH_ERROR', error }, '*');
+                    setTimeout(() => window.close(), 200);
+                }
+                return;
+            }
+
+            if (code) {
+                document.getElementById('status').textContent = 'Authorization code received!';
+                if (window.opener) {
+                    window.opener.postMessage({
+                        type: 'OAUTH_CODE_RECEIVED',
+                        code: code,
+                        state: state
+                    }, '*');
+                    setTimeout(() => window.close(), 500);
+                } else {
+                    window.location.href = '/?code=' + encodeURIComponent(code);
+                }
+            } else {
+                document.getElementById('status').textContent = 'No authorization code found.';
+                if (window.opener) {
+                    window.opener.postMessage({
+                        type: 'OAUTH_ERROR',
+                        error: 'No authorization code found.'
+                    }, '*');
+                    setTimeout(() => window.close(), 200);
+                }
+            }
+        }
+        window.onload = processOAuthCallback;
+    </script>
+</body>
+
+</html>
