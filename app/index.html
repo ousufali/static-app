@@ -171,9 +171,9 @@
 
                     const params = new URLSearchParams({
                         client_key:"sbawncj5urc9813bxe",
-                        scope: "video.upload,user.info.basic",
+                        scope: "video.upload,user.info.basic,video.publish",
                         response_type: "code",
-                        redirect_uri: "http://localhost:8000/tiktok/callback",
+                        redirect_uri: "https://blue-pond-02529b31e.3.azurestaticapps.net/callback",
                         state: "tiktok_oauth_" + Date.now(),
                         code_challenge: codeChallenge,
                         code_challenge_method: "S256"
@@ -203,7 +203,7 @@
 
                 const codeVerifier = localStorage.getItem('tiktok_code_verifier');
 
-                const response = await fetch('http://localhost:8000/validate-tiktok-api', {
+                const response = await fetch('http://localhost:3000/validate-tiktok-api', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
